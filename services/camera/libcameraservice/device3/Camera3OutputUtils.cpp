@@ -1179,73 +1179,37 @@ void collectAndRemovePendingOutputBuffers(bool useHalBufManager,
     }
 }
 
-// Inflight lock is held
-void updateInflightRequestForConcurrentReadersLocked(
-        CaptureOutputStates& states,
-        /*out*/ InFlightRequest& r,
-        const camera_shutter_msg_t& msg) {
-    size_t extraBuffers = 0;
-    for (const auto& concurrentReaderStart : msg.multi_res_concurrent_readers_msg) {
-        // Check validity of multi-resolution readers message.
-        size_t numConcurrentStreams = concurrentReaderStart.streamIds.size();
-        if (numConcurrentStreams == 0) {
-            SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
-                "MultiResolutionConcurrentReader output streamIds empty! Expected "
-                    "at least 1 for frame %d.", msg.frame_number);
-            return;
-        }
+void collectReturnableOutputBuffers(
+        bool useHalBufManager,
+        const std::set<int32_t>& halBufferManagedStreams,
+        sp<NotificationListener> listener,
+        const camera_stream_buffer_t* outputBuffers,
+        size_t numBuffers,
+        int64_t timestamp,
+        int64_t readoutTimestamp,
+        bool requested,
+        int64_t requestTimeNs,
+        SessionStatsBuilder& sessionStatsBuilder,
+        std::vector<BufferToReturn>* returnableBuffers,
+        bool timestampIncreasing,
+        const std::unordered_map<int32_t, std::vector<uint64_t>>& outputSurfaces,
+        const CaptureResultExtras& resultExtras,
+        ERROR_BUF_STRATEGY errorBufStrategy,
+        int /*extraParam*/) {
 
-        int groupId = concurrentReaderStart.groupId;
-        for (auto streamId : concurrentReaderStart.streamIds) {
-            auto outputStream = states.outputStreams.get(streamId);
-            if (outputStream == nullptr) {
-                SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
-                    "MultiResolutionConcurrentReader output stream id %d not valid!",
-                    streamId);
-                return;
-            }
-            if (outputStream->getStreamSetId() != concurrentReaderStart.groupId) {
-                SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
-                        "MultiResolutionConcurrentReader stream_id %d not in groupId %d",
-                        streamId, concurrentReaderStart.groupId);
-                return;
-            }
-            if (!r.requestedMultiResPhysicalIds.contains(groupId)) {
-                SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
-                        "MultiResolutionConcurrentReader groupId %d was not requested",
-                        groupId);
-                return;
-            }
-            if (!r.requestedMultiResPhysicalIds[groupId].enableConcurrency) {
-                SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
-                        "MultiResolutionConcurrentReader groupId %d concurrency not enabled!",
-                        groupId);
-                return;
-            }
-
-            const std::string& physicalCameraId = outputStream->getPhysicalCameraId();
-            if (physicalCameraId.size() > 0) {
-                r.physicalCameraIds.insert(physicalCameraId);
-            }
-        }
-
-        r.requestedMultiResPhysicalIds.erase(groupId);
-        extraBuffers += numConcurrentStreams - 1;
+    // Convert the OxygenOS map (uint64_t) to AOSP map (size_t)
+    std::unordered_map<int32_t, std::vector<size_t>> surfacesSizeT;
+    for (const auto& pair : outputSurfaces) {
+        surfacesSizeT[pair.first].assign(pair.second.begin(), pair.second.end());
     }
 
-    // Make sure all concurrent MultiRes group Ids are received.
-    for (const auto& [groupId, multiResRequest]: r.requestedMultiResPhysicalIds) {
-        if (multiResRequest.enableConcurrency) {
-            SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
-                    "MultiResolutionConcurrentReader StreamGroupState not available "
-                    "for group %d!", groupId);
-            return;
-        }
-    }
-
-    r.numBuffersLeft += extraBuffers;
-    r.resultExtras.multiResConcurrentReadersStart = msg.multi_res_concurrent_readers_msg;
+    // Call the AOSP overload (which takes sp<NotificationListener> by value)
+    collectReturnableOutputBuffers(useHalBufManager, halBufferManagedStreams, listener,
+            outputBuffers, numBuffers, timestamp, readoutTimestamp, requested, requestTimeNs,
+            sessionStatsBuilder, returnableBuffers, timestampIncreasing, surfacesSizeT,
+            resultExtras, errorBufStrategy, TransformationMap{});
 }
+
 
 void notifyShutter(CaptureOutputStates& states, const camera_shutter_msg_t &msg) {
     ATRACE_CALL();
