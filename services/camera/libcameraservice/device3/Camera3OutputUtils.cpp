@@ -1259,6 +1259,74 @@ void collectReturnableOutputBuffers(
 }
 
 
+// Inflight lock is held
+void updateInflightRequestForConcurrentReadersLocked(
+        CaptureOutputStates& states,
+        /*out*/ InFlightRequest& r,
+        const camera_shutter_msg_t& msg) {
+    size_t extraBuffers = 0;
+    for (const auto& concurrentReaderStart : msg.multi_res_concurrent_readers_msg) {
+        // Check validity of multi-resolution readers message.
+        size_t numConcurrentStreams = concurrentReaderStart.streamIds.size();
+        if (numConcurrentStreams == 0) {
+            SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
+                "MultiResolutionConcurrentReader output streamIds empty! Expected "
+                    "at least 1 for frame %d.", msg.frame_number);
+            return;
+        }
+
+        int groupId = concurrentReaderStart.groupId;
+        for (auto streamId : concurrentReaderStart.streamIds) {
+            auto outputStream = states.outputStreams.get(streamId);
+            if (outputStream == nullptr) {
+                SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
+                    "MultiResolutionConcurrentReader output stream id %d not valid!",
+                    streamId);
+                return;
+            }
+            if (outputStream->getStreamSetId() != concurrentReaderStart.groupId) {
+                SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
+                        "MultiResolutionConcurrentReader stream_id %d not in groupId %d",
+                        streamId, concurrentReaderStart.groupId);
+                return;
+            }
+            if (!r.requestedMultiResPhysicalIds.contains(groupId)) {
+                SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
+                        "MultiResolutionConcurrentReader groupId %d was not requested",
+                        groupId);
+                return;
+            }
+            if (!r.requestedMultiResPhysicalIds[groupId].enableConcurrency) {
+                SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
+                        "MultiResolutionConcurrentReader groupId %d concurrency not enabled!",
+                        groupId);
+                return;
+            }
+
+            const std::string& physicalCameraId = outputStream->getPhysicalCameraId();
+            if (physicalCameraId.size() > 0) {
+                r.physicalCameraIds.insert(physicalCameraId);
+            }
+        }
+
+        r.requestedMultiResPhysicalIds.erase(groupId);
+        extraBuffers += numConcurrentStreams - 1;
+    }
+
+    // Make sure all concurrent MultiRes group Ids are received.
+    for (const auto& [groupId, multiResRequest]: r.requestedMultiResPhysicalIds) {
+        if (multiResRequest.enableConcurrency) {
+            SET_ERR(CAMERA_HAL_CALLBACK_ERROR,
+                    "MultiResolutionConcurrentReader StreamGroupState not available "
+                    "for group %d!", groupId);
+            return;
+        }
+    }
+
+    r.numBuffersLeft += extraBuffers;
+    r.resultExtras.multiResConcurrentReadersStart = msg.multi_res_concurrent_readers_msg;
+}
+
 void notifyShutter(CaptureOutputStates& states, const camera_shutter_msg_t &msg) {
     ATRACE_CALL();
     ssize_t idx;
