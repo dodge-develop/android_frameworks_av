@@ -52,6 +52,7 @@ cc_defaults {
         "libpermission",
         "libcutils",
         "libexif",
+        "libfmt_v11",
         "libmedia",
         "libmediautils",
         "libcamera_client",
